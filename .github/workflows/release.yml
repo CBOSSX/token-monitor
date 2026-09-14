@@ -94,6 +94,30 @@ jobs:
               exit 1
             fi
           done
+      - name: Prepare macOS Widget provisioning profiles
+        if: matrix.target == 'mac'
+        shell: bash
+        env:
+          TOKEN_MONITOR_APP_PROVISIONING_PROFILE_BASE64: ${{ secrets.TOKEN_MONITOR_APP_PROVISIONING_PROFILE_BASE64 }}
+          TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64: ${{ secrets.TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [[ "$TOKEN_MONITOR_APP_GROUP" != group.* ]]; then
+            exit 0
+          fi
+          for name in TOKEN_MONITOR_APP_PROVISIONING_PROFILE_BASE64 TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Repository secret $name is required for a group.* macOS Widget App Group"
+              exit 1
+            fi
+          done
+          app_profile="$RUNNER_TEMP/token-monitor-app.provisionprofile"
+          widget_profile="$RUNNER_TEMP/token-monitor-widget.provisionprofile"
+          printf '%s' "$TOKEN_MONITOR_APP_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$app_profile"
+          printf '%s' "$TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$widget_profile"
+          chmod 600 "$app_profile" "$widget_profile"
+          echo "TOKEN_MONITOR_APP_PROVISIONING_PROFILE=$app_profile" >> "$GITHUB_ENV"
+          echo "TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE=$widget_profile" >> "$GITHUB_ENV"
       # electron-builder needs the notarization key as a file, not the base64 secret directly.
       - name: Decode Apple API key
         if: matrix.target == 'mac'
