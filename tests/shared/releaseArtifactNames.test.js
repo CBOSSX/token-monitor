@@ -84,9 +84,10 @@ test('mac release scripts build native Apple Silicon and Intel artifacts with th
   assert.match(workflow, /TOKEN_MONITOR_WIDGET_KIND: \$\{\{ matrix\.target == 'mac' && vars\.TOKEN_MONITOR_WIDGET_KIND \|\| '' \}\}/);
   assert.match(workflow, /DEVELOPMENT_TEAM: \$\{\{ matrix\.target == 'mac' && vars\.DEVELOPMENT_TEAM \|\| '' \}\}/);
   assert.match(workflow, /for name in TOKEN_MONITOR_APP_GROUP TOKEN_MONITOR_WIDGET_BUNDLE_ID TOKEN_MONITOR_WIDGET_KIND DEVELOPMENT_TEAM/);
+  assert.match(workflow, /if \[\[ "\$TOKEN_MONITOR_APP_GROUP" != group\.\* \]\]; then\s+echo "::error::Official macOS Widget releases require a group\.\* TOKEN_MONITOR_APP_GROUP"\s+exit 1/);
   assert.match(workflow, /TOKEN_MONITOR_APP_PROVISIONING_PROFILE_BASE64: \$\{\{ secrets\.TOKEN_MONITOR_APP_PROVISIONING_PROFILE_BASE64 \}\}/);
   assert.match(workflow, /TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64: \$\{\{ secrets\.TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64 \}\}/);
-  assert.match(workflow, /if \[\[ "\$TOKEN_MONITOR_APP_GROUP" != group\.\* \]\]; then\s+exit 0/);
+  assert.doesNotMatch(workflow, /if \[\[ "\$TOKEN_MONITOR_APP_GROUP" != group\.\* \]\]; then\s+exit 0/);
   assert.match(workflow, /for name in TOKEN_MONITOR_APP_PROVISIONING_PROFILE_BASE64 TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64/);
   assert.match(workflow, /printf '%s' "\$TOKEN_MONITOR_APP_PROVISIONING_PROFILE_BASE64" \| base64 --decode > "\$app_profile"/);
   assert.match(workflow, /printf '%s' "\$TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64" \| base64 --decode > "\$widget_profile"/);

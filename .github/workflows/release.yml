@@ -94,6 +94,10 @@ jobs:
               exit 1
             fi
           done
+          if [[ "$TOKEN_MONITOR_APP_GROUP" != group.* ]]; then
+            echo "::error::Official macOS Widget releases require a group.* TOKEN_MONITOR_APP_GROUP"
+            exit 1
+          fi
       - name: Prepare macOS Widget provisioning profiles
         if: matrix.target == 'mac'
         shell: bash
@@ -102,12 +106,9 @@ jobs:
           TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64: ${{ secrets.TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
-          if [[ "$TOKEN_MONITOR_APP_GROUP" != group.* ]]; then
-            exit 0
-          fi
           for name in TOKEN_MONITOR_APP_PROVISIONING_PROFILE_BASE64 TOKEN_MONITOR_WIDGET_PROVISIONING_PROFILE_BASE64; do
             if [ -z "${!name:-}" ]; then
-              echo "::error::Repository secret $name is required for a group.* macOS Widget App Group"
+              echo "::error::Repository secret $name is required for macOS Widget releases"
               exit 1
             fi
           done
