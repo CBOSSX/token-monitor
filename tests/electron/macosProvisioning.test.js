@@ -41,7 +41,7 @@ function fixtureProfiles() {
   };
 }
 
-test('reads fixture provisioning profiles on macOS', { skip: process.platform !== 'darwin' }, () => {
+test('reads realistic fixture provisioning profiles with opaque Apple metadata on macOS', { skip: process.platform !== 'darwin' }, () => {
   const { readProvisioningProfile } = require('../../scripts/macos-provisioning');
   assert.equal(readProvisioningProfile(appPath, { plainPlist: true }).teamIdentifier, 'ABCDE12345');
   assert.equal(readProvisioningProfile(widgetPath, { plainPlist: true }).applicationIdentifier, 'ABCDE12345.com.example.tokenmonitor.widget');

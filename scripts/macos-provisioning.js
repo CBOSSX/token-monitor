@@ -55,39 +55,42 @@ function parseProvisioningProfileDocument(document) {
 }
 
 function readPlistJson(filePath, execFileSyncImpl = execFileSync) {
-  // `plutil -convert json` rejects NSDate values instead of serializing them.
-  // Provisioning profiles always contain ExpirationDate, so remove that one
-  // value from a temporary copy and read it separately as ISO text.
-  let expirationDate = null;
-  try {
-    expirationDate = String(execFileSyncImpl('plutil', [
-      '-extract', 'ExpirationDate', 'raw', '-o', '-', filePath
-    ], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe']
-    })).trim() || null;
-  } catch (_) {}
-
-  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'token-monitor-plist-'));
-  const temporaryPath = path.join(temporaryDirectory, 'profile.plist');
-  try {
-    fs.copyFileSync(filePath, temporaryPath);
-    if (expirationDate) {
-      execFileSyncImpl('plutil', ['-remove', 'ExpirationDate', temporaryPath], {
+  // A real Apple profile contains top-level NSDate and NSData values (for
+  // example CreationDate and DeveloperCertificates). `plutil -convert json`
+  // rejects the whole document when either is present, so extract only the
+  // JSON-compatible fields that participate in distribution validation.
+  const extract = (keyPath, format, fallback) => {
+    try {
+      const output = execFileSyncImpl('plutil', [
+        '-extract', keyPath, format, '-o', '-', filePath
+      ], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe']
       });
+      const value = String(output).trim();
+      if (!value) return fallback;
+      return format === 'json' ? JSON.parse(value) : value;
+    } catch (_) {
+      return fallback;
     }
-    const output = execFileSyncImpl('plutil', ['-convert', 'json', '-o', '-', temporaryPath], {
+  };
+
+  const document = {
+    Entitlements: extract('Entitlements', 'json', {}),
+    TeamIdentifier: extract('TeamIdentifier', 'json', []),
+    ExpirationDate: extract('ExpirationDate', 'raw', null),
+    ProvisionsAllDevices: extract('ProvisionsAllDevices', 'raw', 'false') === 'true'
+  };
+  try {
+    execFileSyncImpl('plutil', [
+      '-extract', 'ProvisionedDevices', 'json', '-o', '-', filePath
+    ], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe']
     });
-    const document = JSON.parse(String(output));
-    if (expirationDate) document.ExpirationDate = expirationDate;
-    return document;
-  } finally {
-    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
-  }
+    document.ProvisionedDevices = [];
+  } catch (_) {}
+  return document;
 }
 
 function readProvisioningProfile(filePath, options = {}) {
