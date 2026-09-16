@@ -21,10 +21,10 @@ const KIMI_KEY_NAMES = ['KIMI_CODE_API_KEY'];
 const KIMI_WEB_TOKEN_NAMES = ['KIMI_AUTH_TOKEN', 'KIMI_MANUAL_COOKIE'];
 const KIMI_MEMBERSHIP_GRACE_MS = 2000;
 
-// The Kimi Code usage API reports the weekly quota in top-level `usage` and
-// the rolling 5-hour rate limit in `limits[]`. Compatible proxies may expose
-// more than one limits[] entry, so duration-based classification remains
-// defensive. Kimi Code itself has no monthly/billing window here.
+// Older Kimi Code responses report the weekly quota in top-level `usage` and
+// the rolling 5-hour rate limit in `limits[]`; the current quota model instead
+// uses named pools under `usages`. Compatible proxies may expose more than one
+// limits[] entry, so duration-based classification remains defensive.
 const KIMI_SESSION_MAX_MINUTES = 6 * 60;
 const KIMI_SESSION_WINDOW_MINUTES = 5 * 60;
 const KIMI_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
@@ -43,6 +43,8 @@ function normalizeKimiWebToken(value) {
   let raw = cleanSecret(value);
   if (!raw) return '';
   raw = raw.replace(/^authorization\s*:\s*/i, '').replace(/^bearer\s+/i, '').trim();
+  const storageMatch = raw.match(/^access_token\s*=\s*([^;\s'"]+)$/i);
+  if (storageMatch) return storageMatch[1].trim();
   const cookieMatch = raw.match(/(?:^|[;\s])kimi-auth=([^;\s'"]+)/i);
   if (cookieMatch) return cookieMatch[1].trim();
   if (/^(?:cookie\s*:|curl\s)/i.test(raw) || raw.includes(';')) return '';
@@ -269,6 +271,7 @@ function parseKimiUsage(rawBody) {
   const pools = objectAt(body, ['usages']);
   for (const [key, kind, label, windowMinutes] of [
     ['limit_5h', 'session', '5-hour', KIMI_SESSION_WINDOW_MINUTES],
+    ['limit_7d', 'weekly', 'Weekly', KIMI_WEEKLY_WINDOW_MINUTES],
     ['limit_month_total', 'billing', 'Monthly', undefined]
   ]) {
     if (seenKinds.has(kind)) continue;
@@ -569,27 +572,27 @@ async function fetchKimiLimits(options = {}, deps = {}) {
   }
 
   const errors = [];
-  let webWindows = [];
   let codeWindows = [];
-  if (webToken) {
-    const web = await fetchKimiWebWindows(webToken, deps);
-    webWindows = web.windows;
-    errors.push(...web.errors);
-  }
-  const missingCodeWindow = !webWindows.some((window) => window.kind === 'session')
-    || !webWindows.some((window) => window.kind === 'weekly');
-  if (key && (!webToken || missingCodeWindow)) {
+  let webWindows = [];
+  if (key) {
     try {
       codeWindows = await fetchKimiCodeWindows(key, deps);
     } catch (error) {
       errors.push(error);
     }
   }
-  const windows = mergeKimiWindows(webWindows, codeWindows);
-  const source = webWindows.length ? 'web' : 'api';
-  // Keep the configured logical account stable when a temporary web failure
-  // makes this tick report Code API fallback windows only.
-  const accountSecret = webToken || key;
+  const codeKinds = new Set(codeWindows.map((window) => window.kind));
+  const missingCodeWindow = ['session', 'weekly', 'billing'].some((kind) => !codeKinds.has(kind));
+  if (webToken && (!key || missingCodeWindow)) {
+    const web = await fetchKimiWebWindows(webToken, deps);
+    webWindows = web.windows;
+    errors.push(...web.errors);
+  }
+  const windows = mergeKimiWindows(codeWindows, webWindows);
+  const source = codeWindows.length ? 'api' : 'web';
+  // Prefer the long-lived Code API key for logical account identity. A Web
+  // access token is short-lived and may rotate while describing the same user.
+  const accountSecret = key || webToken;
   return normalizeLimitProvider({
     provider: 'kimi',
     accountKey: accountSecret ? hashKey('kimi', accountSecret) : '',
