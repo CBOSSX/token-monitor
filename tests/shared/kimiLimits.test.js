@@ -355,6 +355,7 @@ test('fetchKimiLimits keeps the monthly pool from a Code API usages map', async 
   assert.ok(Math.abs(monthly.usedPercent - 3.38) < 1e-10);
   assert.ok(Math.abs(monthly.remainingPercent - 96.62) < 1e-10);
   assert.equal(monthly.resetsAt, '2026-10-15T07:49:10.000Z');
+  assert.equal(monthly.detail, 'Kimi 3.38% · Code 0%');
 });
 
 test('parseKimiUsage backfills ratio pools without displacing canonical windows', () => {
@@ -371,7 +372,19 @@ test('parseKimiUsage backfills ratio pools without displacing canonical windows'
   assert.equal(usage.windows.find((window) => window.kind === 'weekly').usedPercent, 25);
   assert.equal(usage.windows.find((window) => window.kind === 'session').usedPercent, 10);
   assert.equal(usage.windows.find((window) => window.kind === 'billing').usedPercent, 0);
+  assert.equal(usage.windows.find((window) => window.kind === 'billing').detail, 'Kimi 0% · Code 0%');
   assert.equal(usage.windows.length, 3);
+});
+
+test('parseKimiUsage derives the monthly Kimi and Code breakdown from named pools', () => {
+  const usage = parseKimiUsage({ usages: {
+    limit_month_total: { used_ratio: 0.1612, reset_time: '2026-10-15T07:49:10Z' },
+    limit_month_code: { used_ratio: 0.05 }
+  } });
+  const monthly = usage.windows.find((window) => window.kind === 'billing');
+  assert.ok(monthly);
+  assert.equal(monthly.usedPercent, 16.12);
+  assert.equal(monthly.detail, 'Kimi 11.12% · Code 5%');
 });
 
 test('parseKimiUsage handles ratio-only pools and rejects invalid usage ratios', () => {
@@ -392,7 +405,7 @@ test('parseKimiUsage handles ratio-only pools and rejects invalid usage ratios',
   assert.deepEqual(parseKimiUsage({ usages: { limit_month_code: { used_ratio: 0.5 } } }).windows, []);
 });
 
-test('fetchKimiLimits prefers complete Code API windows and skips the Web fallback', async () => {
+test('fetchKimiLimits applies per-window authority when both sources return complete windows', async () => {
   const requests = [];
   const provider = await fetchKimiLimits(
     { kimiWebAccessToken: 'web-token', kimiApiKey: 'code-key' },
@@ -401,25 +414,57 @@ test('fetchKimiLimits prefers complete Code API windows and skips the Web fallba
       now: () => Date.parse('2026-07-19T00:00:00Z'),
       fetch: async (url, init) => {
         requests.push({ url: String(url), init });
-        assert.equal(String(url), KIMI_CODE_USAGES_URL);
+        if (String(url) === KIMI_CODE_USAGES_URL) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ usages: {
+              limit_5h: { used_ratio: 0.1 },
+              limit_7d: { used_ratio: 0.9 },
+              limit_month_total: { used_ratio: 0.3 },
+              limit_month_code: { used_ratio: 0.12 }
+            } })
+          };
+        }
+        if (String(url) === KIMI_MEMBERSHIP_STATS_URL) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              subscriptionBalance: { amountUsedRatio: 0.4, kimiCodeUsedRatio: 0.1 }
+            })
+          };
+        }
+        assert.equal(String(url), KIMI_WEB_USAGES_URL);
         return {
           ok: true,
           status: 200,
-          json: async () => ({ usages: {
-            limit_5h: { used_ratio: 0.1 },
-            limit_7d: { used_ratio: 0.2 },
-            limit_month_total: { used_ratio: 0.3 }
-          } })
+          json: async () => ({
+            usages: [{
+              scope: 'FEATURE_CODING',
+              detail: { used: 20, limit: 100 },
+              limits: [{ detail: { used: 40, limit: 50 }, window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' } }]
+            }]
+          })
         };
       }
     }
   );
 
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].init.headers.Authorization, 'Bearer code-key');
+  assert.deepEqual(new Set(requests.map((request) => request.url)), new Set([
+    KIMI_CODE_USAGES_URL,
+    KIMI_MEMBERSHIP_STATS_URL,
+    KIMI_WEB_USAGES_URL
+  ]));
   assert.equal(provider.source, 'api');
   assert.equal(provider.status, 'ok');
   assert.deepEqual(provider.windows.map((window) => window.kind), ['session', 'weekly', 'billing']);
+  assert.equal(provider.windows.find((window) => window.kind === 'session').usedPercent, 10);
+  assert.equal(provider.windows.find((window) => window.kind === 'weekly').usedPercent, 20);
+  const monthly = provider.windows.find((window) => window.kind === 'billing');
+  assert.equal(monthly.usedPercent, 30);
+  assert.equal(monthly.detail, 'Kimi 18% · Code 12%');
+  assert.equal(provider.accountKey, hashKey('kimi', 'code-key'));
 });
 
 test('fetchKimiLimits uses Web only to fill windows missing from the Code API', async () => {
@@ -460,12 +505,12 @@ test('fetchKimiLimits uses Web only to fill windows missing from the Code API', 
     }
   );
 
-  assert.deepEqual(requests.map((request) => request.url), [
+  assert.deepEqual(new Set(requests.map((request) => request.url)), new Set([
     KIMI_CODE_USAGES_URL,
     KIMI_MEMBERSHIP_STATS_URL,
     KIMI_WEB_USAGES_URL
-  ]);
-  for (const request of requests.slice(1)) {
+  ]));
+  for (const request of requests.filter((request) => request.url !== KIMI_CODE_USAGES_URL)) {
     assert.equal(request.init.headers.Authorization, 'Bearer web-token');
     assert.equal(request.init.headers.Cookie, 'kimi-auth=web-token');
     assert.equal(request.init.headers['User-Agent'], BROWSER_USER_AGENT);
@@ -476,6 +521,48 @@ test('fetchKimiLimits uses Web only to fill windows missing from the Code API', 
   assert.equal(provider.windows.find((window) => window.kind === 'session').usedPercent, 10);
   assert.equal(provider.windows.find((window) => window.kind === 'weekly').usedPercent, 20);
   assert.equal(provider.windows.find((window) => window.kind === 'billing').usedPercent, 40);
+});
+
+test('fetchKimiLimits starts Code and Web requests concurrently', async () => {
+  let releaseCode;
+  let markWebStarted;
+  const codeGate = new Promise((resolve) => { releaseCode = resolve; });
+  const webStarted = new Promise((resolve) => { markWebStarted = resolve; });
+  const result = fetchKimiLimits(
+    { kimiWebAccessToken: 'web-token', kimiApiKey: 'code-key' },
+    {
+      env: {},
+      kimiMembershipGraceMs: 50,
+      now: () => Date.parse('2026-07-19T00:00:00Z'),
+      fetch: async (url) => {
+        if (String(url) === KIMI_CODE_USAGES_URL) {
+          await codeGate;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ usages: { limit_5h: { used_ratio: 0.1 } } })
+          };
+        }
+        markWebStarted();
+        if (String(url) === KIMI_MEMBERSHIP_STATS_URL) return { ok: false, status: 503 };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ usages: [{ scope: 'FEATURE_CODING', detail: { used: 20, limit: 100 } }] })
+        };
+      }
+    }
+  );
+
+  let timer;
+  await Promise.race([
+    webStarted,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Web request did not start')), 100); })
+  ]).finally(() => clearTimeout(timer));
+  releaseCode();
+  const provider = await result;
+  assert.equal(provider.status, 'ok');
+  assert.equal(provider.windows.find((window) => window.kind === 'weekly').usedPercent, 20);
 });
 
 test('fetchKimiLimits keeps web 5-hour and weekly windows when monthly enrichment fails', async () => {
@@ -650,6 +737,35 @@ test('fetchKimiLimits keeps the Code account identity when Web fallback fails', 
   assert.equal(provider.source, 'api');
   assert.equal(provider.status, 'ok');
   assert.equal(provider.accountKey, hashKey('kimi', 'code-key'));
+});
+
+test('fetchKimiLimits uses the Web account identity when Code fails and Web succeeds', async () => {
+  const provider = await fetchKimiLimits(
+    { kimiWebAccessToken: 'web-token', kimiApiKey: 'bad-code-key' },
+    {
+      env: {},
+      now: () => Date.parse('2026-07-19T00:00:00Z'),
+      fetch: async (url) => {
+        if (String(url) === KIMI_CODE_USAGES_URL) return { ok: false, status: 401 };
+        if (String(url) === KIMI_MEMBERSHIP_STATS_URL) return { ok: false, status: 503 };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            usages: [{
+              scope: 'FEATURE_CODING',
+              detail: { used: 20, limit: 100 },
+              limits: [{ detail: { used: 5, limit: 50 }, window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' } }]
+            }]
+          })
+        };
+      }
+    }
+  );
+
+  assert.equal(provider.source, 'web');
+  assert.equal(provider.status, 'ok');
+  assert.equal(provider.accountKey, hashKey('kimi', 'web-token'));
 });
 
 test('fetchKimiLimits maps 401/403 to unauthorized and 429 to sourceRateLimited', async () => {
