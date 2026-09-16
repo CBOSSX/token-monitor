@@ -61,14 +61,28 @@ function parseProvisioningProfileDocument(document) {
 // silently yields nothing on others, which previously made a valid profile
 // look like it had no Team ID.
 function parsePlistXml(xml) {
-  const source = String(xml)
-    .replace(/<\?xml[\s\S]*?\?>/g, '')
-    .replace(/<!DOCTYPE[^>]*>/g, '')
-    .replace(/<!--[\s\S]*?-->/g, '');
+  const source = String(xml);
   let position = 0;
 
   const skipWhitespace = () => {
     while (position < source.length && /\s/.test(source[position])) position += 1;
+  };
+
+  const skipIgnorableMarkup = () => {
+    for (;;) {
+      skipWhitespace();
+      const closing = source.startsWith('<?', position)
+        ? '?>'
+        : source.startsWith('<!--', position)
+          ? '-->'
+          : source.startsWith('<!DOCTYPE', position)
+            ? '>'
+            : null;
+      if (!closing) return;
+      const end = source.indexOf(closing, position);
+      if (end === -1) throw new Error(`plist XML: missing ${closing}`);
+      position = end + closing.length;
+    }
   };
 
   const readUntil = (closing) => {
@@ -94,7 +108,7 @@ function parsePlistXml(xml) {
   );
 
   const readElement = () => {
-    skipWhitespace();
+    skipIgnorableMarkup();
     if (source[position] !== '<') throw new Error('plist XML: expected element');
     const end = source.indexOf('>', position);
     if (end === -1) throw new Error('plist XML: unterminated element');
@@ -128,7 +142,7 @@ function parsePlistXml(xml) {
       case 'dict': {
         const result = {};
         for (;;) {
-          skipWhitespace();
+          skipIgnorableMarkup();
           if (source.startsWith('</dict>', position)) {
             position += '</dict>'.length;
             return result;
@@ -140,7 +154,7 @@ function parsePlistXml(xml) {
       case 'array': {
         const result = [];
         for (;;) {
-          skipWhitespace();
+          skipIgnorableMarkup();
           if (source.startsWith('</array>', position)) {
             position += '</array>'.length;
             return result;
@@ -150,7 +164,7 @@ function parsePlistXml(xml) {
       }
       case 'plist': {
         const value = readElement();
-        skipWhitespace();
+        skipIgnorableMarkup();
         if (source.startsWith('</plist>', position)) position += '</plist>'.length;
         return value;
       }

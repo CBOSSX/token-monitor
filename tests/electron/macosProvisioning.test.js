@@ -86,6 +86,20 @@ test('decodes XML entities exactly once', () => {
   assert.equal(document.nested, '&lt;widget&gt;');
 });
 
+test('parses ignorable XML markup without rewriting the source string', () => {
+  const { parsePlistXml } = require('../../scripts/macos-provisioning');
+  const document = parsePlistXml([
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<!-- before plist -->',
+    '<plist version="1.0"><dict>',
+    '<!-- before key --><key>TeamIdentifier</key>',
+    '<!-- before value --><array><string>ABCDE12345</string><!-- before close --></array>',
+    '</dict><!-- before plist close --></plist>'
+  ].join(''));
+  assert.deepEqual(document.TeamIdentifier, ['ABCDE12345']);
+});
+
 test('validates fixture app and Widget profiles for the production App Group', () => {
   const result = validateProvisioningProfiles({
     appProfilePath: appPath,
