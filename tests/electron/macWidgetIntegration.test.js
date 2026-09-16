@@ -59,6 +59,7 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 
 const {
   DEFAULT_APP_GROUP,
   DEFAULT_WIDGET_BUNDLE_ID,
+  entitlementPlist,
   packageVersion,
   widgetBundleVersion,
   widgetVersions,
@@ -834,6 +835,35 @@ test('keeps marketing and bundle versions numeric across release channels', () =
       bundleVersion: '1.2.3'
     });
   }
+});
+
+test('production entitlement plists bind each provisioned executable to its Apple identity', () => {
+  const appGroup = 'group.com.example.tokenmonitor';
+  const appEntitlements = entitlementPlist(appGroup, {
+    profile: {
+      applicationIdentifier: 'ABCDE12345.com.example.tokenmonitor',
+      teamIdentifier: 'ABCDE12345'
+    }
+  });
+  const widgetEntitlements = entitlementPlist(appGroup, {
+    extension: true,
+    profile: {
+      applicationIdentifier: 'ABCDE12345.com.example.tokenmonitor.widget',
+      teamIdentifier: 'ABCDE12345'
+    }
+  });
+
+  for (const entitlements of [appEntitlements, widgetEntitlements]) {
+    assert.match(entitlements, /<key>com\.apple\.developer\.team-identifier<\/key>\s*<string>ABCDE12345<\/string>/);
+    assert.match(entitlements, /<key>com\.apple\.security\.application-groups<\/key>\s*<array>\s*<string>group\.com\.example\.tokenmonitor<\/string>/);
+  }
+  assert.match(appEntitlements, /<key>com\.apple\.application-identifier<\/key>\s*<string>ABCDE12345\.com\.example\.tokenmonitor<\/string>/);
+  assert.match(widgetEntitlements, /<key>com\.apple\.application-identifier<\/key>\s*<string>ABCDE12345\.com\.example\.tokenmonitor\.widget<\/string>/);
+  assert.match(widgetEntitlements, /<key>com\.apple\.security\.app-sandbox<\/key>\s*<true\/>/);
+
+  const localEntitlements = entitlementPlist(appGroup);
+  assert.doesNotMatch(localEntitlements, /com\.apple\.application-identifier/);
+  assert.doesNotMatch(localEntitlements, /com\.apple\.developer\.team-identifier/);
 });
 
 test('uses the Widget UI revision as the local build number so WidgetKit reindexes descriptors', () => {
