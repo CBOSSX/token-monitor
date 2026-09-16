@@ -264,6 +264,29 @@ function parseKimiUsage(rawBody) {
     });
   }
 
+  // The Code API also reports named ratio pools. Keep canonical usage/limits
+  // windows authoritative and use the total monthly pool, not its Code subset.
+  const pools = objectAt(body, ['usages']);
+  for (const [key, kind, label, windowMinutes] of [
+    ['limit_5h', 'session', '5-hour', KIMI_SESSION_WINDOW_MINUTES],
+    ['limit_month_total', 'billing', 'Monthly', undefined]
+  ]) {
+    if (seenKinds.has(kind)) continue;
+    const source = objectAt(pools, [key]);
+    const usedPercent = ratioPercent(source?.used_ratio ?? source?.usedRatio);
+    if (usedPercent === null) continue;
+    seenKinds.add(kind);
+    windows.push({
+      kind,
+      label,
+      usedPercent,
+      remainingPercent: clampPercent(100 - usedPercent),
+      windowMinutes,
+      resetsAt: toIso(source.reset_time ?? source.resetTime) || undefined,
+      showMeter: true
+    });
+  }
+
   return { windows };
 }
 

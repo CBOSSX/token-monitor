@@ -326,6 +326,68 @@ test('fetchKimiLimits requests usages with a bearer token and normalizes windows
   assert.equal(provider.windows[0].kind, 'session');
 });
 
+test('fetchKimiLimits keeps the monthly pool from a Code API usages map', async () => {
+  const provider = await fetchKimiLimits({ kimiApiKey: 'kimi-key' }, {
+    env: {},
+    now: () => Date.parse('2026-09-15T00:00:00Z'),
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        limits: [{
+          window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' },
+          detail: { limit: '100', remaining: '100', resetTime: '2026-09-15T12:49:10Z' }
+        }],
+        usages: {
+          limit_5h: { used_ratio: 0, reset_time: '2026-09-15T12:49:10Z' },
+          limit_month_total: { used_ratio: 0.0338, reset_time: '2026-10-15T07:49:10Z' },
+          limit_month_code: { used_ratio: 0, reset_time: '2026-10-15T07:49:10Z' }
+        }
+      })
+    })
+  });
+
+  assert.equal(provider.status, 'ok');
+  assert.equal(provider.source, 'api');
+  assert.deepEqual(provider.windows.map((window) => window.kind), ['session', 'billing']);
+  const monthly = provider.windows.find((window) => window.kind === 'billing');
+  assert.equal(monthly.label, 'Monthly');
+  assert.ok(Math.abs(monthly.usedPercent - 3.38) < 1e-10);
+  assert.ok(Math.abs(monthly.remainingPercent - 96.62) < 1e-10);
+  assert.equal(monthly.resetsAt, '2026-10-15T07:49:10.000Z');
+});
+
+test('parseKimiUsage backfills ratio pools without displacing canonical windows', () => {
+  const usage = parseKimiUsage({ data: {
+    usage: { used: 25, limit: 100 },
+    limits: [{ detail: { used: 10, limit: 100 }, window: { duration: 5, timeUnit: 'HOUR' } }],
+    usages: {
+      limit_5h: { used_ratio: 0.5 },
+      limit_month_total: { used_ratio: 0 },
+      limit_month_code: { used_ratio: 0.2 }
+    }
+  } });
+  assert.equal(usage.windows.find((window) => window.kind === 'weekly').usedPercent, 25);
+  assert.equal(usage.windows.find((window) => window.kind === 'session').usedPercent, 10);
+  assert.equal(usage.windows.find((window) => window.kind === 'billing').usedPercent, 0);
+  assert.equal(usage.windows.length, 3);
+});
+
+test('parseKimiUsage handles ratio-only pools and rejects invalid usage ratios', () => {
+  const usage = parseKimiUsage({ usages: {
+    limit_5h: { used_ratio: 0.25, reset_time: '2026-09-15T12:49:10Z' },
+    limit_month_total: { used_ratio: 1.2 }
+  } });
+  assert.deepEqual(usage.windows.map((window) => [window.kind, window.usedPercent]), [
+    ['session', 25], ['billing', 100]
+  ]);
+  assert.equal(usage.windows[0].windowMinutes, 300);
+  for (const used_ratio of [null, '', 'invalid', -0.1]) {
+    assert.deepEqual(parseKimiUsage({ usages: { limit_month_total: { used_ratio } } }).windows, []);
+  }
+  assert.deepEqual(parseKimiUsage({ usages: [{ used_ratio: 0.5 }] }).windows, []);
+  assert.deepEqual(parseKimiUsage({ usages: { limit_month_code: { used_ratio: 0.5 } } }).windows, []);
+});
+
 test('fetchKimiLimits prefers web membership windows when a web token is configured', async () => {
   const requests = [];
   const provider = await fetchKimiLimits(
