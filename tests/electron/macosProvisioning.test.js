@@ -73,6 +73,19 @@ test('parses NSDate and NSData plist values that JSON converters reject', () => 
   assert.deepEqual(parseProvisioningProfileDocument(document).applicationGroups, ['group.com.example.tokenmonitor']);
 });
 
+test('decodes XML entities exactly once', () => {
+  const { parsePlistXml } = require('../../scripts/macos-provisioning');
+  const document = parsePlistXml([
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<plist version="1.0"><dict>',
+    '<key>direct</key><string>&lt;widget&gt; &quot;ok&quot; &apos;yes&apos; &amp;</string>',
+    '<key>nested</key><string>&amp;lt;widget&amp;gt;</string>',
+    '</dict></plist>'
+  ].join(''));
+  assert.equal(document.direct, '<widget> "ok" \'yes\' &');
+  assert.equal(document.nested, '&lt;widget&gt;');
+});
+
 test('validates fixture app and Widget profiles for the production App Group', () => {
   const result = validateProvisioningProfiles({
     appProfilePath: appPath,

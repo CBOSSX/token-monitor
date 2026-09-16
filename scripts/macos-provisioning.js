@@ -79,12 +79,19 @@ function parsePlistXml(xml) {
     return text;
   };
 
-  const decodeEntities = (text) => text
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, '&');
+  const entityValues = Object.freeze({
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    amp: '&'
+  });
+  // Decode only entities present in the original text. Replacement text must
+  // not be scanned again: `&amp;lt;` represents the literal text `&lt;`, not `<`.
+  const decodeEntities = (text) => text.replace(
+    /&(lt|gt|quot|apos|amp);/g,
+    (_entity, name) => entityValues[name]
+  );
 
   const readElement = () => {
     skipWhitespace();
