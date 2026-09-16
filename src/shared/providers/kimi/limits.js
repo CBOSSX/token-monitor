@@ -271,8 +271,7 @@ function parseKimiUsage(rawBody) {
   // preserve the existing membership breakdown without adding a second meter.
   const pools = objectAt(body, ['usages']);
   for (const [key, kind, label, windowMinutes] of [
-    ['limit_5h', 'session', '5-hour', KIMI_SESSION_WINDOW_MINUTES],
-    ['limit_7d', 'weekly', 'Weekly', KIMI_WEEKLY_WINDOW_MINUTES]
+    ['limit_5h', 'session', '5-hour', KIMI_SESSION_WINDOW_MINUTES]
   ]) {
     if (seenKinds.has(kind)) continue;
     const source = objectAt(pools, [key]);
@@ -570,20 +569,6 @@ function mergeKimiWindows(...groups) {
   return ['session', 'weekly', 'billing'].map((kind) => byKind.get(kind)).filter(Boolean);
 }
 
-// Authority is per window, not per credential. Code is the stable primary for
-// 5-hour and monthly pools, while Web GetUsages remains the source that matches
-// the console's weekly gauge (#343). A missing preferred window falls back to
-// the other credential without letting one global source reorder every kind.
-function mergeKimiSourceWindows(codeWindows, webWindows) {
-  const code = new Map((codeWindows || []).map((window) => [window.kind, window]));
-  const web = new Map((webWindows || []).map((window) => [window.kind, window]));
-  return [
-    code.get('session') || web.get('session'),
-    web.get('weekly') || code.get('weekly'),
-    code.get('billing') || web.get('billing')
-  ].filter(Boolean);
-}
-
 function failureStatus(errors) {
   const statuses = errors.map((error) => error?.status).filter(Boolean);
   if (statuses.includes('unauthorized')) return 'unauthorized';
@@ -610,25 +595,32 @@ async function fetchKimiLimits(options = {}, deps = {}) {
   const errors = [];
   let codeWindows = [];
   let webWindows = [];
-  const codeOutcome = key
-    ? settledValue(fetchKimiCodeWindows(key, deps))
-    : Promise.resolve({ value: [], error: null });
-  const webOutcome = webToken
-    ? settledValue(fetchKimiWebWindows(webToken, deps))
-    : Promise.resolve({ value: { windows: [], errors: [] }, error: null });
-  const [code, web] = await Promise.all([codeOutcome, webOutcome]);
-  if (code.error) errors.push(code.error);
-  else codeWindows = code.value || [];
-  if (web.error) errors.push(web.error);
-  else {
-    webWindows = web.value?.windows || [];
-    errors.push(...(web.value?.errors || []));
+  if (key) {
+    try {
+      codeWindows = await fetchKimiCodeWindows(key, deps);
+    } catch (error) {
+      errors.push(error);
+    }
   }
-  const windows = mergeKimiSourceWindows(codeWindows, webWindows);
+
+  const codeKinds = new Set(codeWindows.map((window) => window.kind));
+  const missingCodeWindow = ['session', 'weekly', 'billing'].some((kind) => !codeKinds.has(kind));
+  if (webToken && (!key || missingCodeWindow)) {
+    try {
+      const web = await fetchKimiWebWindows(webToken, deps);
+      webWindows = web.windows;
+      errors.push(...web.errors);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+
+  const windows = mergeKimiWindows(codeWindows, webWindows);
   const source = codeWindows.length ? 'api' : 'web';
-  // Bind identity to a credential that actually supplied this observation. A
-  // rejected or unavailable Code key must not label a successful Web result.
-  const accountSecret = codeWindows.length ? key : webWindows.length ? webToken : key || webToken;
+  // Account identity follows the configured primary credential, not whichever
+  // source happened to answer this refresh. Otherwise a transient Code failure
+  // creates a second logical account row when Web fallback succeeds.
+  const accountSecret = key || webToken;
   return normalizeLimitProvider({
     provider: 'kimi',
     accountKey: accountSecret ? hashKey('kimi', accountSecret) : '',
